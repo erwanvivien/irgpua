@@ -45,7 +45,7 @@ __global__ void kernel_garbage(int* buffer, int *size)
     int coord = tid + blockIdx.x * BLOCK_SIZE;
 
     if (coord < *size)
-        buffer[coord] += corrections[tid % 4];
+        buffer[coord] += corrections[tid & 0b11];
 }
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
