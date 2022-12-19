@@ -34,6 +34,20 @@ struct DifferentFrom
     }
 };
 
+template <int BLOCK_SIZE>
+__global__ void kernel_garbage(int* buffer, int *size)
+{
+    constexpr const static int corrections[] = {
+        1, -5, 3, -8
+    };
+
+    int tid = threadIdx.x;
+    int coord = tid + blockIdx.x * BLOCK_SIZE;
+
+    if (coord < *size)
+        buffer[coord] += corrections[tid % 4];
+}
+
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
@@ -72,27 +86,28 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // There are still ways to speeds this process of course (wait for last class)
         images[i] = pipeline.get_image(i);
 
+        /// Retrieve image information
         size_t width = images[i].width;
         size_t height = images[i].height;
         int* buffer = &images[i].buffer[0];
-
         int num_items = images[i].buffer.size();
 
-        // std::cout << "width: " << width <<
-        //     " height: " << height <<
-        //     " num_items: " << num_items << std::endl;
-
+        /// Prepare CUDA buffer (image input)
         int *d_in = NULL;
         CHECK_CUDA_CALL(cudaMalloc(&d_in, num_items * sizeof(int)));
         CHECK_CUDA_CALL(cudaMemcpy(d_in, buffer, num_items * sizeof(int),
                         cudaMemcpyHostToDevice));
 
+        /// Prepare CUDA buffer (image without -27s)
         int *d_out = NULL;
         CHECK_CUDA_CALL(cudaMalloc(&d_out, num_items * sizeof(int)));
 
+        /// Retrieve the information
         int *d_num_selected_out = NULL;
         CHECK_CUDA_CALL(cudaMalloc(&d_num_selected_out, 1 * sizeof(int)));
         CHECK_CUDA_CALL(cudaMemset(d_num_selected_out, 0, 1 * sizeof(int)));
+
+        /// Create a class with overloaded bool operator
         DifferentFrom select(-27);
 
         // Determine temporary device storage requirements
@@ -104,29 +119,32 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // Allocate temporary storage
         CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
 
-        // std::cout << "&temp_storage_bytes: " << &temp_storage_bytes << std::endl;
-        // std::cout << "temp_storage_bytes: " << temp_storage_bytes << std::endl;
-
-        // Run selection
+        // Run selection (removes -27s)
         cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
                 d_num_selected_out, num_items, select);
 
+        /// Move to CPU side the count of item to check
+        /// TODO: Remove this (useless)
         int d_num_selected_out_host = 0;
         CHECK_CUDA_CALL(cudaMemcpy(&d_num_selected_out_host,
                     d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost));
 
-        // std::cout << "from " << num_items << " to "
-        //     << d_num_selected_out_host << std::endl;
-        // std::cout << "expected: " << width * height << std::endl;
-
         assert(d_num_selected_out_host == width * height);
 
+        /// Remove the random garbage from the array
+        constexpr const int blocksize = 1024;
+        const int gridsize = (width * height + blocksize - 1) / blocksize;
+        kernel_garbage<blocksize><<<gridsize, blocksize>>>(d_out, d_num_selected_out);
+
+        /// Retrieve the information back
+        CHECK_CUDA_CALL(cudaMemcpy(buffer, d_out, d_num_selected_out_host * sizeof(int), cudaMemcpyDeviceToHost));
+        images.resize(d_num_selected_out_host);
+
+        /// Clean everything
         CHECK_CUDA_CALL(cudaFree(d_temp_storage));
         CHECK_CUDA_CALL(cudaFree(d_in));
         CHECK_CUDA_CALL(cudaFree(d_out));
         CHECK_CUDA_CALL(cudaFree(d_num_selected_out));
-
-        return 0;
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;
