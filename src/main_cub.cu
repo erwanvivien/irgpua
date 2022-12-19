@@ -74,6 +74,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     std::cout << "Done, starting compute" << std::endl;
 
+    /// Prepare streams
+    constexpr int STREAM_COUNT = 4;
+    cudaStream_t streams[STREAM_COUNT] = { 0 };
+    for (int i = 0; i < STREAM_COUNT; i++)
+    {
+        cudaStreamCreate(streams + i);
+    }
+
     // #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
@@ -92,20 +100,23 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         int* buffer = &images[i].buffer[0];
         int num_items = images[i].buffer.size();
 
+        /// Retrieve the attached stream
+        cudaStream_t stream = streams[i % 4];
+
         /// Prepare CUDA buffer (image input)
         int *d_in = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_in, num_items * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemcpy(d_in, buffer, num_items * sizeof(int),
-                        cudaMemcpyHostToDevice));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_in, num_items * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(d_in, buffer, num_items * sizeof(int),
+                        cudaMemcpyHostToDevice, stream));
 
         /// Prepare CUDA buffer (image without -27s)
         int *d_out = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_out, num_items * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_out, num_items * sizeof(int), stream));
 
         /// Retrieve the information
         int *d_num_selected_out = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_num_selected_out, 1 * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemset(d_num_selected_out, 0, 1 * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_num_selected_out, 1 * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemsetAsync(d_num_selected_out, 0, 1 * sizeof(int), stream));
 
         /// Create a class with overloaded bool operator
         DifferentFrom select(-27);
@@ -115,36 +126,43 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         size_t   temp_storage_bytes = 0;
 
         cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                d_num_selected_out, num_items, select);
+                d_num_selected_out, num_items, select, stream);
         // Allocate temporary storage
         CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
 
         // Run selection (removes -27s)
         cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                d_num_selected_out, num_items, select);
+                d_num_selected_out, num_items, select, stream);
 
         /// Move to CPU side the count of item to check
         /// TODO: Remove this (useless)
         int d_num_selected_out_host = 0;
-        CHECK_CUDA_CALL(cudaMemcpy(&d_num_selected_out_host,
-                    d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(&d_num_selected_out_host,
+                    d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
 
         assert(d_num_selected_out_host == width * height);
 
         /// Remove the random garbage from the array
         constexpr const int blocksize = 1024;
         const int gridsize = (width * height + blocksize - 1) / blocksize;
-        kernel_garbage<blocksize><<<gridsize, blocksize>>>(d_out, d_num_selected_out);
+        kernel_garbage<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, d_num_selected_out);
 
         /// Retrieve the information back
-        CHECK_CUDA_CALL(cudaMemcpy(buffer, d_out, d_num_selected_out_host * sizeof(int), cudaMemcpyDeviceToHost));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, d_num_selected_out_host * sizeof(int), cudaMemcpyDeviceToHost, stream));
         images.resize(d_num_selected_out_host);
 
         /// Clean everything
-        CHECK_CUDA_CALL(cudaFree(d_temp_storage));
-        CHECK_CUDA_CALL(cudaFree(d_in));
-        CHECK_CUDA_CALL(cudaFree(d_out));
-        CHECK_CUDA_CALL(cudaFree(d_num_selected_out));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_out, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_num_selected_out, stream));
+    }
+
+    /// Cleanup streams
+    for (int i = 0; i < STREAM_COUNT; i++)
+    {
+        cudaStreamSynchronize(streams[i]);
+        cudaStreamDestroy(streams[i]);
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;
