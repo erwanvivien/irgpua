@@ -122,25 +122,29 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         DifferentFrom select(-27);
 
         // Determine temporary device storage requirements
-        void     *d_temp_storage = NULL;
-        size_t   temp_storage_bytes = 0;
-
-        cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                d_num_selected_out, num_items, select, stream);
-        // Allocate temporary storage
-        CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-
-        // Run selection (removes -27s)
-        cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                d_num_selected_out, num_items, select, stream);
-
-        /// Move to CPU side the count of item to check
-        /// TODO: Remove this (useless)
         int d_num_selected_out_host = 0;
-        CHECK_CUDA_CALL(cudaMemcpyAsync(&d_num_selected_out_host,
-                    d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
+        {
+            void     *d_temp_storage = NULL;
+            size_t   temp_storage_bytes = 0;
 
-        assert(d_num_selected_out_host == width * height);
+            cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
+                    d_num_selected_out, num_items, select, stream);
+            // Allocate temporary storage
+            CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+
+            // Run selection (removes -27s)
+            cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
+                    d_num_selected_out, num_items, select, stream);
+
+            /// Move to CPU side the count of item to check
+            /// TODO: Remove this (useless)
+            CHECK_CUDA_CALL(cudaMemcpyAsync(&d_num_selected_out_host,
+                        d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
+
+            assert(d_num_selected_out_host == width * height);
+
+            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+        }
 
         /// Remove the random garbage from the array
         constexpr const int blocksize = 1024;
@@ -152,7 +156,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         images.resize(d_num_selected_out_host);
 
         /// Clean everything
-        CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_out, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_num_selected_out, stream));
