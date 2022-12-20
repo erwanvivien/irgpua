@@ -14,6 +14,11 @@
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 
+#include <thrust/transform.h>
+#include <thrust/functional.h>
+
+#include <thrust/version.h>
+
 inline void checkCudaCall(cudaError_t error, const char* file, int line)
 {
     if (error)
@@ -73,6 +78,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
 
+    std::cout << "using thrust version: " << THRUST_VERSION << std::endl;
+
     std::cout << "File loading..." << std::endl;
 
     // - Get file paths
@@ -97,11 +104,11 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     /// Prepare streams
     constexpr int STREAM_COUNT = 4;
-    // cudaStream_t streams[STREAM_COUNT] = { 0 };
-    // for (int i = 0; i < STREAM_COUNT; i++)
-    // {
-    //     cudaStreamCreate(streams + i);
-    // }
+    cudaStream_t streams[STREAM_COUNT] = { 0 };
+    for (int i = 0; i < STREAM_COUNT; i++)
+    {
+        cudaStreamCreate(streams + i);
+    }
 
     // #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
@@ -124,22 +131,22 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         int img_dim = width * height;
 
         /// Retrieve the attached stream
-        // cudaStream_t stream = streams[i % 4];
+        cudaStream_t stream = streams[i % 4];
 
         /// Prepare CUDA buffer (image input)
         int *d_in = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_in, num_items * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemcpy(d_in, buffer, num_items * sizeof(int),
-                        cudaMemcpyHostToDevice));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_in, num_items * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(d_in, buffer, num_items * sizeof(int),
+                        cudaMemcpyHostToDevice, stream));
 
         /// Prepare CUDA buffer (image without -27s)
         int *d_out = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_out, num_items * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_out, num_items * sizeof(int), stream));
 
         /// Retrieve the information
         int *d_num_selected_out = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_num_selected_out, 1 * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemset(d_num_selected_out, 0, 1 * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_num_selected_out, 1 * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemsetAsync(d_num_selected_out, 0, 1 * sizeof(int), stream));
 
         /// Create a class with overloaded bool operator
         DifferentFrom select(-27);
@@ -151,33 +158,33 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             int d_num_selected_out_host = 0;
 
             cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                    d_num_selected_out, num_items, select);
+                    d_num_selected_out, num_items, select, stream);
             // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
 
             // Run selection (removes -27s)
             cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                    d_num_selected_out, num_items, select);
+                    d_num_selected_out, num_items, select, stream);
 
             /// Move to CPU side the count of item to check
             /// TODO: Remove this (useless)
-            CHECK_CUDA_CALL(cudaMemcpy(&d_num_selected_out_host,
-                        d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost));
+            CHECK_CUDA_CALL(cudaMemcpyAsync(&d_num_selected_out_host,
+                        d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
 
             assert(d_num_selected_out_host == img_dim);
 
-            CHECK_CUDA_CALL(cudaFree(d_temp_storage));
+            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
         }
 
         /// Remove the random garbage from the array
         constexpr const int blocksize = 1024;
         const int gridsize = (img_dim + blocksize - 1) / blocksize;
-        kernel_garbage<blocksize><<<gridsize, blocksize, 0>>>(d_out, d_num_selected_out);
+        kernel_garbage<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, d_num_selected_out);
 
         /// Compute histogram
         int*     d_histogram = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_histogram, 256 * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemset(d_histogram, 0, 256 * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMallocAsync(&d_histogram, 256 * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemsetAsync(d_histogram, 0, 256 * sizeof(int), stream));
 
         {
             void*    d_temp_storage = NULL;
@@ -190,15 +197,15 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             int upper_level = 256;
 
             cub::DeviceHistogram::HistogramEven(d_temp_storage, temp_storage_bytes,
-                    d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples);
+                    d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples, stream);
 
             // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
             // Compute histograms
             cub::DeviceHistogram::HistogramEven(d_temp_storage, temp_storage_bytes,
-                    d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples);
+                    d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples, stream);
 
-            CHECK_CUDA_CALL(cudaFree(d_temp_storage));
+            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
         }
 
         /// Replace histogram with cumulative histogram
@@ -207,37 +214,39 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             size_t   temp_storage_bytes = 0;
 
             int *d_in = d_histogram;
-            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256);
+            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256, stream);
             // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
 
             // Run exclusive prefix sum
-            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256);
+            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256, stream);
 
-            CHECK_CUDA_CALL(cudaFree(d_temp_storage));
+            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
         }
 
         /// Apply histogram equalization
-        auto iter = thrust::find_if(thrust::device, d_histogram, d_histogram + 256, DifferentFrom(0));
-        ToneMap tonemap(iter, d_histogram, img_dim);
-        thrust::transform(thrust::device, d_out, d_out + img_dim, d_out, tonemap);
+        auto policy = thrust::cuda::par.on(stream);
+
+        auto iter = thrust::find_if(policy, d_histogram, d_histogram + 256, DifferentFrom(0), stream);
+        ToneMap tonemap(NULL, d_histogram, img_dim);
+        thrust::transform(policy, d_out, d_out + img_dim, d_out, tonemap);
 
         /// Retrieve the information back
-        CHECK_CUDA_CALL(cudaMemcpy(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
         images.resize(img_dim);
 
         /// Clean everything
-        CHECK_CUDA_CALL(cudaFree(d_in));
-        CHECK_CUDA_CALL(cudaFree(d_out));
-        CHECK_CUDA_CALL(cudaFree(d_num_selected_out));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_out, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_num_selected_out, stream));
     }
 
-    // /// Cleanup streams
-    // for (int i = 0; i < STREAM_COUNT; i++)
-    // {
-    //     cudaStreamSynchronize(streams[i]);
-    //     cudaStreamDestroy(streams[i]);
-    // }
+    /// Cleanup streams
+    for (int i = 0; i < STREAM_COUNT; i++)
+    {
+        cudaStreamSynchronize(streams[i]);
+        cudaStreamDestroy(streams[i]);
+    }
 
     std::cout << "Done with compute, starting stats" << std::endl;
 
@@ -289,4 +298,5 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     std::cout << "Done, the internet is safe now :)" << std::endl;
 
     return 0;
-}
+
+    }
