@@ -73,6 +73,14 @@ __global__ void kernel_garbage(int* buffer, int *size)
         buffer[coord] += corrections[tid & 0b11];
 }
 
+constexpr const long unsigned int expected_total[] = {
+    27805567, 185010925, 342970490, 33055988, 390348481,
+    91297791, 10825197, 118842538, 72434629, 191735142,
+    182802772, 78632198, 491605096, 8109782, 111786760,
+    406461934, 80671811, 70004942, 104275727, 30603818,
+    6496225, 207334021, 268424419, 432916359, 51973720,
+    24489209, 80124196, 29256842, 25803206, 34550754,
+};
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
@@ -297,8 +305,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         images[i].write(str);
     }
 
+    for (int i = 0; i < nb_images; ++i) {
+        if (images[i].to_sort.total != expected_total[i]) {
+            std::cerr << "Differ computed image " << i << ": (" << images[i].to_sort.total << ") expected " << expected_total[i] << std::endl;
+        }
+    }
+
     std::cout << "Done, the internet is safe now :)" << std::endl;
 
     return 0;
 
-    }
+}
