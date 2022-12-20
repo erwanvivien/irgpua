@@ -209,10 +209,12 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             int *d_in = d_histogram;
             cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256);
             // Allocate temporary storage
-            cudaMalloc(&d_temp_storage, temp_storage_bytes);
+            CHECK_CUDA_CALL(cudaMalloc(&d_temp_storage, temp_storage_bytes));
 
             // Run exclusive prefix sum
             cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256);
+
+            CHECK_CUDA_CALL(cudaFree(d_temp_storage));
         }
 
         /// Apply histogram equalization
