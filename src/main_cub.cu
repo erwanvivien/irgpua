@@ -233,7 +233,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
         /// Retrieve the information back
         CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
-        images.resize(img_dim);
+
+        /// Not mandatory (we are not using values past img_dim)
+        images[i].buffer.resize(img_dim);
 
         /// Clean everything
         CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
