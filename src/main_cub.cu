@@ -227,8 +227,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         /// Apply histogram equalization
         auto policy = thrust::cuda::par.on(stream);
 
-        auto iter = thrust::find_if(policy, d_histogram, d_histogram + 256, DifferentFrom(0), stream);
-        ToneMap tonemap(NULL, d_histogram, img_dim);
+        auto iter = thrust::find_if(policy, d_histogram, d_histogram + 256, DifferentFrom(0));
+        ToneMap tonemap(iter, d_histogram, img_dim);
         thrust::transform(policy, d_out, d_out + img_dim, d_out, tonemap);
 
         /// Retrieve the information back
