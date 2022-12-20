@@ -17,8 +17,6 @@
 #include <thrust/transform.h>
 #include <thrust/functional.h>
 
-#include <thrust/version.h>
-
 inline void checkCudaCall(cudaError_t error, const char* file, int line)
 {
     if (error)
@@ -85,8 +83,6 @@ constexpr const long unsigned int expected_total[] = {
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
-
-    std::cout << "using thrust version: " << THRUST_VERSION << std::endl;
 
     std::cout << "File loading..." << std::endl;
 
