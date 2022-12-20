@@ -38,7 +38,6 @@ struct DifferentFrom
     }
 };
 
-// Functor for tripling integer values and converting to doubles
 struct ToneMap
 {
     int *min_histo;
@@ -49,8 +48,8 @@ struct ToneMap
     explicit ToneMap(int *min_histo, int *histo, int img_dim) : min_histo(min_histo), histo(histo), img_dim(img_dim) {}
 
     __host__ __device__ __forceinline__
-    double operator()(const int &a) const {
-        return lroundf(((histo[a] - *min_histo) / static_cast<float>(img_dim - *min_histo)) * 255.0f);
+    int operator()(const int &a) const {
+        return std::roundf(((histo[a] - *min_histo) / static_cast<float>(img_dim - *min_histo)) * 255.0f);
     }
 };
 
