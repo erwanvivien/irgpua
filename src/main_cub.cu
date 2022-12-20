@@ -10,6 +10,10 @@
 
 #include <cub/cub.cuh>
 
+#include <thrust/find.h>
+#include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+
 inline void checkCudaCall(cudaError_t error, const char* file, int line)
 {
     if (error)
@@ -34,6 +38,22 @@ struct DifferentFrom
     }
 };
 
+// Functor for tripling integer values and converting to doubles
+struct ToneMap
+{
+    int *min_histo;
+    int *histo;
+    int img_dim;
+
+    CUB_RUNTIME_FUNCTION __forceinline__
+    explicit ToneMap(int *min_histo, int *histo, int img_dim) : min_histo(min_histo), histo(histo), img_dim(img_dim) {}
+
+    __host__ __device__ __forceinline__
+    double operator()(const int &a) const {
+        return lroundf(((histo[a] - *min_histo) / static_cast<float>(img_dim - *min_histo)) * 255.0f);
+    }
+};
+
 template <int BLOCK_SIZE>
 __global__ void kernel_garbage(int* buffer, int *size)
 {
@@ -43,10 +63,12 @@ __global__ void kernel_garbage(int* buffer, int *size)
 
     int tid = threadIdx.x;
     int coord = tid + blockIdx.x * BLOCK_SIZE;
+    /// TODO: Use int4* instead of int*
 
     if (coord < *size)
         buffer[coord] += corrections[tid & 0b11];
 }
+
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
@@ -155,18 +177,18 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
         /// Compute histogram
         int*     d_histogram = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&d_histogram, img_dim * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemset(d_histogram, 0, img_dim * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMalloc(&d_histogram, 256 * sizeof(int)));
+        CHECK_CUDA_CALL(cudaMemset(d_histogram, 0, 256 * sizeof(int)));
 
         {
             void*    d_temp_storage = NULL;
             size_t   temp_storage_bytes = 0;
 
-            int      num_samples = img_dim;    // e.g., 10
-            int*   d_samples = d_out;      // e.g., [2.2, 6.1, 7.1, 2.9, 3.5, 0.3, 2.9, 2.1, 6.1, 999.5]
-            int num_levels  = 256 + 1;     // e.g., 7       (seven level boundaries for six bins)
-            int lower_level = 0;    // e.g., 0.0     (lower sample value boundary of lowest bin)
-            int upper_level = 256;    // e.g., 12.0    (upper sample value boundary of upper bin)
+            int      num_samples = img_dim;
+            int*   d_samples = d_out;
+            int num_levels  = 256 + 1;
+            int lower_level = 0;
+            int upper_level = 256;
 
             cub::DeviceHistogram::HistogramEven(d_temp_storage, temp_storage_bytes,
                     d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples);
@@ -196,6 +218,11 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             // Run exclusive prefix sum
             cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, inclusive_sum, img_dim);
         }
+
+        /// Apply histogram equalization
+        auto iter = thrust::find_if(thrust::device, d_histogram, d_histogram + 256, DifferentFrom(0));
+        ToneMap tonemap(iter, d_histogram, img_dim);
+        thrust::transform(thrust::device, d_out, d_out + img_dim, d_out, tonemap);
 
         /// Retrieve the information back
         CHECK_CUDA_CALL(cudaMemcpy(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost));
