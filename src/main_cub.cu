@@ -201,21 +201,18 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             CHECK_CUDA_CALL(cudaFree(d_temp_storage));
         }
 
-        int *inclusive_sum = NULL;
-        CHECK_CUDA_CALL(cudaMalloc(&inclusive_sum, img_dim * sizeof(int)));
-        CHECK_CUDA_CALL(cudaMemset(inclusive_sum, 0, img_dim * sizeof(int)));
-
+        /// Replace histogram with cumulative histogram
         {
             void     *d_temp_storage = NULL;
             size_t   temp_storage_bytes = 0;
 
-            int *d_in = d_out;
-            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, inclusive_sum, img_dim);
+            int *d_in = d_histogram;
+            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256);
             // Allocate temporary storage
             cudaMalloc(&d_temp_storage, temp_storage_bytes);
 
             // Run exclusive prefix sum
-            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, inclusive_sum, img_dim);
+            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256);
         }
 
         /// Apply histogram equalization
