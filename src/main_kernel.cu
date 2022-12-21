@@ -450,17 +450,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You can use multiple CPU threads for your GPU version using openmp or not
         // Up to you :)
         {
-            // void     *d_temp_storage = NULL;
-            // size_t   temp_storage_bytes = 0;
-
-            // cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
-            // // Allocate temporary storage
-            // CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
-            // // Run sum-reduction
-            // cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
-
-            // CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
-
             constexpr const int blocksize = 1024;
             const int gridsize = (img_dim + blocksize - 1) / (blocksize * 1);
 
