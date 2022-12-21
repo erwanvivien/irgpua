@@ -205,6 +205,56 @@ __global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *in
     }
 }
 
+template <typename T, int BLOCK_SIZE>
+__global__
+void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
+{
+    // __shared__ T buffer_shared[BLOCK_SIZE << 1];
+    // const int id = threadIdx.x + blockIdx.x * BLOCK_SIZE * 4;
+    // const int id_less_size = id < size;
+
+    // buffer_shared[threadIdx.x] = buffer[id] * (id < size) 
+    //                            + buffer[id + BLOCK_SIZE] * (id + BLOCK_SIZE < size);
+    // buffer_shared[threadIdx.x + BLOCK_SIZE] = buffer[id + BLOCK_SIZE * 2] * (id + BLOCK_SIZE * 2 < size)
+    //                            + buffer[id + BLOCK_SIZE * 3] * (id + BLOCK_SIZE * 3 < size);
+
+    // __syncthreads();
+
+    // for (int start = BLOCK_SIZE; start > 0; start >>= 1)
+    // {
+    //     if (threadIdx.x < start && id_less_size)
+    //     {
+    //         buffer_shared[threadIdx.x] += buffer_shared[threadIdx.x + start];
+    //     }
+    //     __syncthreads();
+    // }
+
+    // if (threadIdx.x == 0)
+    // {
+    //     atomicAdd(total, buffer_shared[0]);
+    // }
+
+    __shared__ T buffer_shared[BLOCK_SIZE];
+    const int id = threadIdx.x + blockIdx.x * BLOCK_SIZE;
+
+    if (id < size)
+        buffer_shared[threadIdx.x] = buffer[id];
+    else
+        buffer_shared[threadIdx.x] = 0;
+
+    __syncthreads();
+
+    for (int offset = BLOCK_SIZE / 2; offset > 0; offset >>= 1)
+    {
+        if (threadIdx.x < offset)
+            buffer_shared[threadIdx.x] += buffer_shared[threadIdx.x + offset];
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+        atomicAdd(total, buffer_shared[0]);
+}
+
 constexpr const long unsigned int expected_total[] = {
     27805567, 185010925, 342970490, 33055988, 390348481,
     91297791, 10825197, 118842538, 72434629, 191735142,
@@ -390,9 +440,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         }
 
         /// Compute reduce
-        int *reduce_sum = NULL;
-        CHECK_CUDA_CALL(cudaMallocAsync(&reduce_sum, 1 * sizeof(int), stream));
-        CHECK_CUDA_CALL(cudaMemsetAsync(reduce_sum, 0, 1 * sizeof(int), stream));
+        int *total_sum = NULL;
+        CHECK_CUDA_CALL(cudaMallocAsync(&total_sum, 1 * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemsetAsync(total_sum, 0, 1 * sizeof(int), stream));
 
         // - First compute the total of each image
 
@@ -400,16 +450,21 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You can use multiple CPU threads for your GPU version using openmp or not
         // Up to you :)
         {
-            void     *d_temp_storage = NULL;
-            size_t   temp_storage_bytes = 0;
+            // void     *d_temp_storage = NULL;
+            // size_t   temp_storage_bytes = 0;
 
-            cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
-            // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
-            // Run sum-reduction
-            cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
+            // cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
+            // // Allocate temporary storage
+            // CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
+            // // Run sum-reduction
+            // cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
 
-            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+            // CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+
+            constexpr const int blocksize = 1024;
+            const int gridsize = (img_dim + blocksize - 1) / (blocksize * 1);
+
+            reduce_sum<int, blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, total_sum, img_dim);
         }
 
         /// Not mandatory (we are not using values past img_dim)
@@ -418,13 +473,13 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         /// Retrieve the image from GPU
         CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
         /// Retrieve the total from GPU
-        CHECK_CUDA_CALL(cudaMemcpyAsync(&images[i].to_sort.total, reduce_sum, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(&images[i].to_sort.total, total_sum, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
 
         /// Clean everything
         CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_out, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_num_selected_out, stream));
-        CHECK_CUDA_CALL(cudaFreeAsync(reduce_sum, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(total_sum, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_histogram, stream));
     }
 
