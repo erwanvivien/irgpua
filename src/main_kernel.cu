@@ -209,49 +209,30 @@ template <typename T, int BLOCK_SIZE>
 __global__
 void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
 {
-    // __shared__ T buffer_shared[BLOCK_SIZE << 1];
-    // const int id = threadIdx.x + blockIdx.x * BLOCK_SIZE * 4;
-    // const int id_less_size = id < size;
+    __shared__ T buffer_shared[BLOCK_SIZE << 1];
+    const int tid = threadIdx.x;
+    const int coord = tid + blockIdx.x * (BLOCK_SIZE << 1);
 
-    // buffer_shared[threadIdx.x] = buffer[id] * (id < size) 
-    //                            + buffer[id + BLOCK_SIZE] * (id + BLOCK_SIZE < size);
-    // buffer_shared[threadIdx.x + BLOCK_SIZE] = buffer[id + BLOCK_SIZE * 2] * (id + BLOCK_SIZE * 2 < size)
-    //                            + buffer[id + BLOCK_SIZE * 3] * (id + BLOCK_SIZE * 3 < size);
-
-    // __syncthreads();
-
-    // for (int start = BLOCK_SIZE; start > 0; start >>= 1)
-    // {
-    //     if (threadIdx.x < start && id_less_size)
-    //     {
-    //         buffer_shared[threadIdx.x] += buffer_shared[threadIdx.x + start];
-    //     }
-    //     __syncthreads();
-    // }
-
-    // if (threadIdx.x == 0)
-    // {
-    //     atomicAdd(total, buffer_shared[0]);
-    // }
-
-    __shared__ T buffer_shared[BLOCK_SIZE];
-    const int id = threadIdx.x + blockIdx.x * BLOCK_SIZE;
-
-    if (id < size)
-        buffer_shared[threadIdx.x] = buffer[id];
+    if (coord < size)
+        buffer_shared[tid] = buffer[coord];
     else
-        buffer_shared[threadIdx.x] = 0;
+        buffer_shared[tid] = 0;
+
+    if (coord + BLOCK_SIZE < size)
+        buffer_shared[tid + BLOCK_SIZE] = buffer[coord + BLOCK_SIZE];
+    else
+        buffer_shared[tid + BLOCK_SIZE] = 0;
 
     __syncthreads();
 
-    for (int offset = BLOCK_SIZE / 2; offset > 0; offset >>= 1)
+    for (int offset = BLOCK_SIZE; offset > 0; offset >>= 1)
     {
-        if (threadIdx.x < offset)
-            buffer_shared[threadIdx.x] += buffer_shared[threadIdx.x + offset];
+        if (tid < offset)
+            buffer_shared[tid] += buffer_shared[tid + offset];
         __syncthreads();
     }
 
-    if (threadIdx.x == 0)
+    if (tid == 0)
         atomicAdd(total, buffer_shared[0]);
 }
 
@@ -451,7 +432,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // Up to you :)
         {
             constexpr const int blocksize = 1024;
-            const int gridsize = (img_dim + blocksize - 1) / (blocksize * 1);
+            const int gridsize = (img_dim + (blocksize * 2) - 1) / (blocksize * 2);
 
             reduce_sum<int, blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, total_sum, img_dim);
         }
@@ -517,8 +498,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     for (int i = 0; i < nb_images; ++i) {
         auto &img = images[i];
         if (img.to_sort.total != expected_total[img.to_sort.id]) {
+            auto diff = (signed long) img.to_sort.total - (signed long) expected_total[img.to_sort.id];
             std::cerr << "Differ computed image " << i << ": (" << img.to_sort.total <<
-                ") expected " << expected_total[img.to_sort.id] << std::endl;
+                ") expected " << expected_total[img.to_sort.id] <<
+                " (" << (diff > 0 ? "+" : "") << diff << ")" << std::endl;
         }
     }
 
