@@ -66,6 +66,145 @@ void cleanup_garbage(int *buffer, int size)
     buffer[coords] += offset[tid & 0b11]; // mod 4
 }
 
+enum State {
+    NoCompute = 0,
+    SelfCompute = 1,
+    AllCompute = 2,
+};
+
+template <int STEP>
+__device__ void warp_scan(int *internal_buffer_1, int *internal_buffer_2, int tid)
+{
+    constexpr int left = 1 << STEP;
+    if ((tid & left) != 0)
+    {
+        int right = tid >> STEP;
+        int from = left * right - 1;
+
+        internal_buffer_1[tid] += internal_buffer_1[from];
+        internal_buffer_2[tid] += internal_buffer_2[from];
+    }
+
+    __syncthreads();
+}
+
+template <typename T, int BLOCK_SIZE, bool IS_INCLUSIVE = false>
+__global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *internal_sum, int* preceeding_sum)
+{
+    __shared__ T internal_buffer_1[BLOCK_SIZE];
+    __shared__ T internal_buffer_2[BLOCK_SIZE];
+    __shared__ int blockIdx_x;
+
+    int tid = threadIdx.x;
+    if (tid == 0)
+        blockIdx_x = atomicAdd(counter, 1);
+
+    __syncthreads();
+
+    int coord = tid + blockIdx_x * (BLOCK_SIZE << 1);
+    int value_1 = internal_buffer_1[tid] = buffer[coord];
+    int value_2 = internal_buffer_2[tid] = buffer[coord + BLOCK_SIZE];
+
+    __syncthreads();
+
+    // Cumulative sum
+    warp_scan<0>(internal_buffer_1, internal_buffer_2, tid); __syncwarp();
+    warp_scan<1>(internal_buffer_1, internal_buffer_2, tid); __syncwarp();
+    warp_scan<2>(internal_buffer_1, internal_buffer_2, tid); __syncwarp();
+    warp_scan<3>(internal_buffer_1, internal_buffer_2, tid); __syncwarp();
+    warp_scan<4>(internal_buffer_1, internal_buffer_2, tid); __syncwarp();
+
+    if constexpr (32 < BLOCK_SIZE)
+    {
+        warp_scan<5>(internal_buffer_1, internal_buffer_2, tid);
+        __syncthreads();
+    }
+    if constexpr (64 < BLOCK_SIZE)
+    {
+        warp_scan<6>(internal_buffer_1, internal_buffer_2, tid);
+        __syncthreads();
+    }
+    if constexpr (128 < BLOCK_SIZE)
+    {
+        warp_scan<7>(internal_buffer_1, internal_buffer_2, tid);
+        __syncthreads();
+    }
+    if constexpr (256 < BLOCK_SIZE)
+    {
+        warp_scan<8>(internal_buffer_1, internal_buffer_2, tid);
+        __syncthreads();
+    }
+    if constexpr (512 < BLOCK_SIZE)
+    {
+        warp_scan<9>(internal_buffer_1, internal_buffer_2, tid);
+        __syncthreads();
+    }
+
+    constexpr const int last = BLOCK_SIZE - 1;
+    internal_buffer_2[tid] += internal_buffer_1[last];
+
+    int *prefix_sum = preceeding_sum + blockIdx_x;
+    int *curr_sum = internal_sum + blockIdx_x;
+    int *curr_status = status + blockIdx_x;
+
+    __shared__ int prev_value;
+
+    if (tid == last)
+    {
+        int local_prev_value = 0;
+
+        atomicExch(curr_sum, internal_buffer_2[last]);
+        __threadfence_system();
+        atomicExch(curr_status, SelfCompute);
+
+        if (blockIdx_x != 0)
+        {
+            int back = 1;
+            while (back <= blockIdx_x)
+            {
+                int back_status = atomicAdd(curr_status - back, 0);
+                if (back_status == NoCompute)
+                {
+                    continue;
+                }
+
+                else if (back_status == SelfCompute) {
+                    local_prev_value += atomicAdd(curr_sum - back, 0);
+                    back += 1;
+                } else {
+                    local_prev_value += atomicAdd(prefix_sum - back, 0);
+                    break;
+                }
+            }
+        }
+
+        prev_value = local_prev_value;
+    }
+
+    __syncthreads();
+
+    internal_buffer_1[tid] += prev_value;
+    internal_buffer_2[tid] += prev_value;
+
+    if (tid == last)
+    {
+        atomicExch(prefix_sum, internal_buffer_2[last]);
+        __threadfence_system();
+        atomicExch(curr_status, AllCompute);
+    }
+
+    if constexpr (IS_INCLUSIVE)
+    {
+        buffer[coord] = internal_buffer_1[tid];
+        buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid];
+    }
+    else
+    {
+        buffer[coord] = internal_buffer_1[tid] - value_1;
+        buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid] - value_2;
+    }
+}
+
 constexpr const long unsigned int expected_total[] = {
     27805567, 185010925, 342970490, 33055988, 390348481,
     91297791, 10825197, 118842538, 72434629, 191735142,
@@ -214,18 +353,31 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
         /// Replace histogram with cumulative histogram
         {
-            void     *d_temp_storage = NULL;
-            size_t   temp_storage_bytes = 0;
+            constexpr const int blocksize = 128;
+            const int gridsize = (256 + blocksize - 1) / (blocksize * 2);
 
-            int *d_in = d_histogram;
-            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256, stream);
-            // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
+            int *counter = NULL;
+            CHECK_CUDA_CALL(cudaMalloc(&counter, 1 * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMemset(counter, 0, 1 * sizeof(int)));
 
-            // Run exclusive prefix sum
-            cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_in, d_in, 256, stream);
+            int *status = NULL;
+            CHECK_CUDA_CALL(cudaMalloc(&status, gridsize * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMemset(status, NoCompute, gridsize * sizeof(int)));
 
-            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+            int *internal_sum = NULL;
+            CHECK_CUDA_CALL(cudaMalloc(&internal_sum, gridsize * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMemset(internal_sum, 0, gridsize * sizeof(int)));
+
+            int *preceeding_sum = NULL;
+            CHECK_CUDA_CALL(cudaMalloc(&preceeding_sum, gridsize * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMemset(preceeding_sum, 0, gridsize * sizeof(int)));
+
+            sum_scan<int, blocksize, true><<<gridsize, blocksize, 0, stream>>>(d_histogram, 256, counter, status, internal_sum, preceeding_sum);
+
+            CHECK_CUDA_CALL(cudaFree(counter));
+            CHECK_CUDA_CALL(cudaFree(status));
+            CHECK_CUDA_CALL(cudaFree(internal_sum));
+            CHECK_CUDA_CALL(cudaFree(preceeding_sum));
         }
 
         /// Apply histogram equalization
