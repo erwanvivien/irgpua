@@ -56,20 +56,20 @@ struct ToneMap
     }
 };
 
-template <int BLOCK_SIZE>
-__global__ void kernel_garbage(int* buffer, int *size)
+struct RemoveGarbage
 {
-    constexpr const static int corrections[] = {
-        1, -5, 3, -8
-    };
+    __host__ __device__ __forceinline__
+    int4 operator()(const int4 &a) const {
+        int4 tmp = a;
 
-    int tid = threadIdx.x;
-    int coord = tid + blockIdx.x * BLOCK_SIZE;
-    /// TODO: Use int4* instead of int*
+        tmp.x += 1;
+        tmp.y -= 5;
+        tmp.z += 3;
+        tmp.w -= 8;
 
-    if (coord < *size)
-        buffer[coord] += corrections[tid & 0b11];
-}
+        return tmp;
+    }
+};
 
 constexpr const long unsigned int expected_total[] = {
     27805567, 182802772, 78632198, 491605096, 8109782,
@@ -181,9 +181,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         }
 
         /// Remove the random garbage from the array
-        constexpr const int blocksize = 1024;
-        const int gridsize = (img_dim + blocksize - 1) / blocksize;
-        kernel_garbage<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, d_num_selected_out);
+        {
+            auto policy = thrust::cuda::par.on(stream);
+
+            RemoveGarbage garbage;
+            int4 *d_garbage = reinterpret_cast<int4 *>(d_out);
+            int img_dim_4 = img_dim / 4 + (img_dim % 4 == 0 ? 0 : 1);
+            thrust::transform(policy, d_garbage, d_garbage + img_dim_4, d_garbage, garbage);
+        }
 
         /// Compute histogram
         int*     d_histogram = NULL;
