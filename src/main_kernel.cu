@@ -56,20 +56,21 @@ struct ToneMap
     }
 };
 
-struct RemoveGarbage
+__global__
+void cleanup_garbage(int *buffer, int size)
 {
-    __host__ __device__ __forceinline__
-    int4 operator()(const int4 &a) const {
-        int4 tmp = a;
+    const int tid = threadIdx.x;
+    const int coords = tid + blockIdx.x * blockDim.x;
 
-        tmp.x += 1;
-        tmp.y -= 5;
-        tmp.z += 3;
-        tmp.w -= 8;
-
-        return tmp;
-    }
-};
+    if (tid % 4 == 0)
+        buffer[coords] += 1;
+    else if (tid % 4 == 1)
+        buffer[coords] -= 5;
+    else if (tid % 4 == 2)
+        buffer[coords] += 3;
+    else if (tid % 4 == 3)
+        buffer[coords] -= 8;
+}
 
 constexpr const long unsigned int expected_total[] = {
     27805567, 185010925, 342970490, 33055988, 390348481,
@@ -113,6 +114,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     {
         cudaStreamCreate(streams + i);
     }
+    
 
     // #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
@@ -126,6 +128,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // There are still ways to speeds this process of course (wait for last class)
         images[i] = pipeline.get_image(i);
 
+
         /// Retrieve image information
         size_t width = images[i].width;
         size_t height = images[i].height;
@@ -133,6 +136,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         int num_items = images[i].buffer.size();
 
         int img_dim = width * height;
+
+        constexpr int blocksize = 1024;
+        const int gridsize = (img_dim + blocksize - 1) / blocksize;
 
         /// Retrieve the attached stream
         cudaStream_t stream = streams[i % 4];
@@ -182,12 +188,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
         /// Remove the random garbage values from the array
         {
-            auto policy = thrust::cuda::par.on(stream);
-
-            RemoveGarbage garbage;
-            int4 *d_garbage = reinterpret_cast<int4 *>(d_out);
-            int img_dim_4 = img_dim / 4 + (img_dim % 4 == 0 ? 0 : 1);
-            thrust::transform(policy, d_garbage, d_garbage + img_dim_4, d_garbage, garbage);
+            cleanup_garbage<<<gridsize, blocksize, 0, stream>>>(d_out, img_dim);
         }
 
         /// Compute histogram
