@@ -62,14 +62,8 @@ void cleanup_garbage(int *buffer, int size)
     const int tid = threadIdx.x;
     const int coords = tid + blockIdx.x * blockDim.x;
 
-    if (tid % 4 == 0)
-        buffer[coords] += 1;
-    else if (tid % 4 == 1)
-        buffer[coords] -= 5;
-    else if (tid % 4 == 2)
-        buffer[coords] += 3;
-    else if (tid % 4 == 3)
-        buffer[coords] -= 8;
+    constexpr const int offset[4] = { 1, -5, 3, -8 };
+    buffer[coords] += offset[tid & 0b11]; // mod 4
 }
 
 constexpr const long unsigned int expected_total[] = {
