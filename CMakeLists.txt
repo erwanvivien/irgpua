@@ -25,9 +25,11 @@ set(CMAKE_CUDA_FLAGS "-Xcompiler -fopenmp --extended-lambda --generate-line-info
 
 add_executable(main src/main.cu src/fix_cpu.cc)
 add_executable(cub src/main_cub.cu)
+add_executable(kernel src/main_kernel.cu)
 
 target_link_libraries(main PUBLIC OpenMP::OpenMP_CXX)
 target_link_libraries(cub PUBLIC OpenMP::OpenMP_CXX)
+target_link_libraries(kernel PUBLIC OpenMP::OpenMP_CXX)
 
 # BUILD_TYPE
 if (NOT CMAKE_BUILD_TYPE)
