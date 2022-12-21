@@ -229,22 +229,51 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         }
 
         /// Apply histogram equalization
-        auto policy = thrust::cuda::par.on(stream);
+        {
+            auto policy = thrust::cuda::par.on(stream);
 
-        auto iter = thrust::find_if(policy, d_histogram, d_histogram + 256, DifferentFrom(0));
-        ToneMap tonemap(iter, d_histogram, img_dim);
-        thrust::transform(policy, d_out, d_out + img_dim, d_out, tonemap);
+            auto iter = thrust::find_if(policy, d_histogram, d_histogram + 256, DifferentFrom(0));
+            ToneMap tonemap(iter, d_histogram, img_dim);
+            thrust::transform(policy, d_out, d_out + img_dim, d_out, tonemap);
+        }
 
-        /// Retrieve the information back
-        CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
+        /// Compute reduce
+        int *reduce_sum = NULL;
+        CHECK_CUDA_CALL(cudaMallocAsync(&reduce_sum, 1 * sizeof(int), stream));
+        CHECK_CUDA_CALL(cudaMemsetAsync(reduce_sum, 0, 1 * sizeof(int), stream));
+
+        // - First compute the total of each image
+
+        // TODO : make it GPU compatible (aka faster)
+        // You can use multiple CPU threads for your GPU version using openmp or not
+        // Up to you :)
+        {
+            void     *d_temp_storage = NULL;
+            size_t   temp_storage_bytes = 0;
+
+            cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
+            // Allocate temporary storage
+            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
+            // Run sum-reduction
+            cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_out, reduce_sum, img_dim, stream);
+
+            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+        }
 
         /// Not mandatory (we are not using values past img_dim)
         images[i].buffer.resize(img_dim);
+
+        /// Retrieve the image from GPU
+        CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
+        /// Retrieve the total from GPU
+        CHECK_CUDA_CALL(cudaMemcpyAsync(&images[i].to_sort.total, reduce_sum, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
 
         /// Clean everything
         CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_out, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_num_selected_out, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(reduce_sum, stream));
+        CHECK_CUDA_CALL(cudaFreeAsync(d_histogram, stream));
     }
 
     /// Cleanup streams
@@ -258,18 +287,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     // -- All images are now fixed : compute stats (total then sort)
 
-    // - First compute the total of each image
-
-    // TODO : make it GPU compatible (aka faster)
-    // You can use multiple CPU threads for your GPU version using openmp or not
-    // Up to you :)
-    #pragma omp parallel for
-    for (int i = 0; i < nb_images; ++i)
-    {
-        auto& image = images[i];
-        const int image_size = image.width * image.height;
-        image.to_sort.total = std::reduce(image.buffer.cbegin(), image.buffer.cbegin() + image_size, 0);
-    }
 
     // - All totals are known, sort images accordingly (OPTIONAL)
     // Moving the actual images is too expensive, sort image indices instead
@@ -310,5 +327,4 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     std::cout << "Done, the internet is safe now :)" << std::endl;
 
     return 0;
-
 }
