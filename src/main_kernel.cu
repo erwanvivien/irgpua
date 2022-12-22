@@ -388,27 +388,27 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             const int gridsize = (256 + blocksize - 1) / (blocksize * 2);
 
             int *counter = NULL;
-            CHECK_CUDA_CALL(cudaMalloc(&counter, 1 * sizeof(int)));
-            CHECK_CUDA_CALL(cudaMemset(counter, 0, 1 * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMallocAsync(&counter, 1 * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(counter, 0, 1 * sizeof(int), stream));
 
             int *status = NULL;
-            CHECK_CUDA_CALL(cudaMalloc(&status, gridsize * sizeof(int)));
-            CHECK_CUDA_CALL(cudaMemset(status, NoCompute, gridsize * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMallocAsync(&status, gridsize * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(status, NoCompute, gridsize * sizeof(int), stream));
 
             int *internal_sum = NULL;
-            CHECK_CUDA_CALL(cudaMalloc(&internal_sum, gridsize * sizeof(int)));
-            CHECK_CUDA_CALL(cudaMemset(internal_sum, 0, gridsize * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMallocAsync(&internal_sum, gridsize * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(internal_sum, 0, gridsize * sizeof(int), stream));
 
             int *preceeding_sum = NULL;
-            CHECK_CUDA_CALL(cudaMalloc(&preceeding_sum, gridsize * sizeof(int)));
-            CHECK_CUDA_CALL(cudaMemset(preceeding_sum, 0, gridsize * sizeof(int)));
+            CHECK_CUDA_CALL(cudaMallocAsync(&preceeding_sum, gridsize * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(preceeding_sum, 0, gridsize * sizeof(int), stream));
 
             sum_scan<int, blocksize, true><<<gridsize, blocksize, 0, stream>>>(d_histogram, 256, counter, status, internal_sum, preceeding_sum);
 
-            CHECK_CUDA_CALL(cudaFree(counter));
-            CHECK_CUDA_CALL(cudaFree(status));
-            CHECK_CUDA_CALL(cudaFree(internal_sum));
-            CHECK_CUDA_CALL(cudaFree(preceeding_sum));
+            CHECK_CUDA_CALL(cudaFreeAsync(counter, stream));
+            CHECK_CUDA_CALL(cudaFreeAsync(status, stream));
+            CHECK_CUDA_CALL(cudaFreeAsync(internal_sum, stream));
+            CHECK_CUDA_CALL(cudaFreeAsync(preceeding_sum, stream));
         }
 
         /// Apply histogram equalization
