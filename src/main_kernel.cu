@@ -236,6 +236,24 @@ void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
         atomicAdd(total, buffer_shared[0]);
 }
 
+template <int BLOCK_SIZE>
+__global__
+void histogram(const int* __restrict__ buffer, int size, int* __restrict__ bins, int bincount)
+{
+    const int tid = threadIdx.x;
+    const int coord = tid + blockIdx.x * BLOCK_SIZE;
+
+
+    if (coord < size)
+    {
+        if (buffer[coord] < 0 || buffer[coord] > 255) {
+            printf("%s:%d: buffer with value %d at coord %d", __FILE__, __LINE__, buffer[coord], coord);
+        }
+
+        atomicAdd(bins + buffer[coord], 1);
+    }
+}
+
 constexpr const long unsigned int expected_total[] = {
     27805567, 185010925, 342970490, 33055988, 390348481,
     91297791, 10825197, 118842538, 72434629, 191735142,
@@ -361,31 +379,16 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         CHECK_CUDA_CALL(cudaMemsetAsync(d_histogram, 0, 256 * sizeof(int), stream));
 
         {
-            void*    d_temp_storage = NULL;
-            size_t   temp_storage_bytes = 0;
+            constexpr const int blocksize = 1024;
+            const int gridsize = (img_dim + blocksize - 1) / blocksize;
 
-            int      num_samples = img_dim;
-            int*   d_samples = d_out;
-            int num_levels  = 256 + 1;
-            int lower_level = 0;
-            int upper_level = 256;
-
-            cub::DeviceHistogram::HistogramEven(d_temp_storage, temp_storage_bytes,
-                    d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples, stream);
-
-            // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
-            // Compute histograms
-            cub::DeviceHistogram::HistogramEven(d_temp_storage, temp_storage_bytes,
-                    d_samples, d_histogram, num_levels, lower_level, upper_level, num_samples, stream);
-
-            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+            histogram<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, img_dim, d_histogram, 256);
         }
 
         /// Replace histogram with cumulative histogram
         {
             constexpr const int blocksize = 128;
-            const int gridsize = (256 + blocksize - 1) / (blocksize * 2);
+            const int gridsize = 1;
 
             int *counter = NULL;
             CHECK_CUDA_CALL(cudaMallocAsync(&counter, 1 * sizeof(int), stream));
