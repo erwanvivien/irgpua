@@ -246,10 +246,6 @@ void histogram(const int* __restrict__ buffer, int size, int* __restrict__ bins,
 
     if (coord < size)
     {
-        if (buffer[coord] < 0 || buffer[coord] > 255) {
-            printf("%s:%d: buffer with value %d at coord %d", __FILE__, __LINE__, buffer[coord], coord);
-        }
-
         atomicAdd(bins + buffer[coord], 1);
     }
 }
