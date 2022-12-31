@@ -41,21 +41,6 @@ struct DifferentFrom
     }
 };
 
-struct ToneMap
-{
-    int *min_histo;
-    int *histo;
-    int img_dim;
-
-    CUB_RUNTIME_FUNCTION __forceinline__
-    explicit ToneMap(int *min_histo, int *histo, int img_dim) : min_histo(min_histo), histo(histo), img_dim(img_dim) {}
-
-    __host__ __device__ __forceinline__
-    int operator()(const int &a) const {
-        return std::roundf(((histo[a] - *min_histo) / static_cast<float>(img_dim - *min_histo)) * 255.0f);
-    }
-};
-
 __global__
 void cleanup_garbage(int *buffer, int size)
 {
