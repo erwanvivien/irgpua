@@ -241,7 +241,10 @@ void histogram_min(int* __restrict__ histo, int *min_histo)
     const int tid = threadIdx.x;
     const int coord = tid + blockIdx.x * BLOCK_SIZE;
 
-    if (histo[coord] != 0)
+    atomicExch(min_histo, 255);
+    __syncthreads();
+
+    if (coord < BLOCK_SIZE && histo[coord] > 0)
     {
         atomicMin(min_histo, coord);
     }
@@ -430,7 +433,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             CHECK_CUDA_CALL(cudaMallocAsync(&min_histo, 1 * sizeof(int), stream));
             CHECK_CUDA_CALL(cudaMemsetAsync(min_histo, 0, 1 * sizeof(int), stream));
 
-            histogram_min<256><<<1, 256, 0, stream>>>(d_out, min_histo);
+            histogram_min<256><<<1, 256, 0, stream>>>(d_histogram, min_histo);
             histogram_tonemap<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, img_dim, d_histogram, min_histo);
 
             CHECK_CUDA_CALL(cudaFreeAsync(min_histo, stream));
