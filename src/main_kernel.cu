@@ -437,7 +437,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         }
 
         /// Not mandatory (we are not using values past img_dim)
-        images[i].buffer.resize(img_dim);
+        // images[i].buffer.resize(img_dim);
 
         /// Retrieve the image from GPU
         CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
