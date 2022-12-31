@@ -243,10 +243,37 @@ void histogram(const int* __restrict__ buffer, int size, int* __restrict__ bins,
     const int tid = threadIdx.x;
     const int coord = tid + blockIdx.x * BLOCK_SIZE;
 
-
     if (coord < size)
     {
         atomicAdd(bins + buffer[coord], 1);
+    }
+}
+
+template <int BLOCK_SIZE>
+__global__
+void histogram_min(int* __restrict__ histo, int *min_histo)
+{
+    const int tid = threadIdx.x;
+    const int coord = tid + blockIdx.x * BLOCK_SIZE;
+
+    if (histo[coord] != 0)
+    {
+        atomicMin(min_histo, coord);
+    }
+}
+
+template <int BLOCK_SIZE>
+__global__
+void histogram_tonemap(int* __restrict__ buffer, int size, int *histo, int *min_histo_index)
+{
+    const int tid = threadIdx.x;
+    const int coord = tid + blockIdx.x * BLOCK_SIZE;
+
+    int min_histo = histo[*min_histo_index];
+
+    if (coord < size)
+    {
+        buffer[coord] = std::roundf(((histo[buffer[coord]] - min_histo) / static_cast<float>(size - min_histo)) * 255.0f);
     }
 }
 
@@ -292,7 +319,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     {
         cudaStreamCreate(streams + i);
     }
-    
 
     // #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
@@ -412,11 +438,17 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
         /// Apply histogram equalization
         {
-            auto policy = thrust::cuda::par.on(stream);
+            constexpr const int blocksize = 1024;
+            const int gridsize = (img_dim + (blocksize) - 1) / (blocksize);
 
-            auto iter = thrust::find_if(policy, d_histogram, d_histogram + 256, DifferentFrom(0));
-            ToneMap tonemap(iter, d_histogram, img_dim);
-            thrust::transform(policy, d_out, d_out + img_dim, d_out, tonemap);
+            int *min_histo = NULL;
+            CHECK_CUDA_CALL(cudaMallocAsync(&min_histo, 1 * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(min_histo, 0, 1 * sizeof(int), stream));
+
+            histogram_min<256><<<1, 256, 0, stream>>>(d_out, min_histo);
+            histogram_tonemap<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, img_dim, d_histogram, min_histo);
+
+            CHECK_CUDA_CALL(cudaFreeAsync(min_histo, stream));
         }
 
         /// Compute reduce
