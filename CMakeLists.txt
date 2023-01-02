@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.18)
 include(FindCUDAToolkit)
 
 enable_language(CUDA)
+set(CMAKE_CUDA_ARCHITECTURES 70)
 
 find_package(OpenMP REQUIRED)
 

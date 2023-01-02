@@ -357,17 +357,29 @@ void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
         atomicAdd(total, buffer_shared[0]);
 }
 
-template <int BLOCK_SIZE>
+template <int BLOCK_SIZE, int BIN_COUNT>
 __global__
-void histogram(const int* __restrict__ buffer, int size, int* __restrict__ bins, int bincount)
+void histogram(const int* __restrict__ buffer, int size, int* __restrict__ bins)
 {
     const int tid = threadIdx.x;
     const int coord = tid + blockIdx.x * BLOCK_SIZE;
 
+    // Local bins
+    __shared__ int s_bins[BIN_COUNT];
+
+    // Initialize local bins to 0
+    for (int i = tid; i < BIN_COUNT; i += blockDim.x)
+        s_bins[i] = 0;
+    __syncthreads();
+
+    // Update local bins
     if (coord < size)
-    {
-        atomicAdd(bins + buffer[coord], 1);
-    }
+        atomicAdd_block(&s_bins[buffer[coord]], 1);
+    __syncthreads();
+
+    // Propagate to common bins
+    for (int i = tid; i < BIN_COUNT; i += blockDim.x)
+        atomicAdd_system(&bins[i], s_bins[i]);
 }
 
 template <int BLOCK_SIZE>
@@ -524,15 +536,16 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         }
 
         /// Compute histogram
-        int*     d_histogram = NULL;
+        int* d_histogram = NULL;
         CHECK_CUDA_CALL(cudaMallocAsync(&d_histogram, 256 * sizeof(int), stream));
         CHECK_CUDA_CALL(cudaMemsetAsync(d_histogram, 0, 256 * sizeof(int), stream));
 
         {
             constexpr const int blocksize = 1024;
             const int gridsize = (img_dim + blocksize - 1) / blocksize;
+            constexpr const int bincount = 256;
 
-            histogram<blocksize><<<gridsize, blocksize, 0, stream>>>(d_out, img_dim, d_histogram, 256);
+            histogram<blocksize, bincount><<<gridsize, blocksize, 0, stream>>>(d_out, img_dim, d_histogram);
         }
 
         /// Replace histogram with cumulative histogram
