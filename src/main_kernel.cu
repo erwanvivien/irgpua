@@ -389,7 +389,8 @@ void histogram_min(int* __restrict__ histo, int *min_histo)
     const int tid = threadIdx.x;
     const int coord = tid + blockIdx.x * BLOCK_SIZE;
 
-    atomicExch(min_histo, 255);
+    if (tid == 0)
+        atomicExch(min_histo, 255);
     __syncthreads();
 
     if (coord < BLOCK_SIZE && histo[coord] > 0)
