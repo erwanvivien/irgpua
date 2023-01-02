@@ -190,6 +190,142 @@ __global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *in
     }
 }
 
+template <int STEP>
+__device__ void warp_compact(int *internal_buffer, int tid)
+{
+    constexpr int left = 1 << STEP;
+    if ((tid & left) != 0)
+    {
+        int right = tid >> STEP;
+        int from = left * right - 1;
+
+        internal_buffer[tid] += internal_buffer[from];
+    }
+
+    __syncthreads();
+}
+
+template <typename T, int BLOCK_SIZE>
+__global__ void compact(const T* buffer, T* out_buffer, int size, int *counter, int* status, int *internal_sum, int* preceeding_sum)
+{
+    __shared__ T pred_sum[BLOCK_SIZE];
+    __shared__ int blockIdx_x;
+
+    int tid = threadIdx.x;
+    if (tid == 0)
+        blockIdx_x = atomicAdd(counter, 1);
+
+    __syncthreads();
+
+    int coord = tid + blockIdx_x * BLOCK_SIZE;
+    /// We assign our array and a local temporary (for future usage)
+    int value = -27;
+    if (coord < size)
+    {
+        value = buffer[coord];
+        pred_sum[tid] = value == -27 ? 0 : 1;
+    }
+    else
+    {
+        pred_sum[tid] = 0;
+    }
+
+    __syncthreads();
+
+    // Cumulative sum
+    warp_compact<0>(pred_sum, tid); __syncwarp();
+    warp_compact<1>(pred_sum, tid); __syncwarp();
+    warp_compact<2>(pred_sum, tid); __syncwarp();
+    warp_compact<3>(pred_sum, tid); __syncwarp();
+    warp_compact<4>(pred_sum, tid); __syncwarp();
+
+    if constexpr (32 < BLOCK_SIZE)
+    {
+        warp_compact<5>(pred_sum, tid);
+        __syncthreads();
+    }
+    if constexpr (64 < BLOCK_SIZE)
+    {
+        warp_compact<6>(pred_sum, tid);
+        __syncthreads();
+    }
+    if constexpr (128 < BLOCK_SIZE)
+    {
+        warp_compact<7>(pred_sum, tid);
+        __syncthreads();
+    }
+    if constexpr (256 < BLOCK_SIZE)
+    {
+        warp_compact<8>(pred_sum, tid);
+        __syncthreads();
+    }
+    if constexpr (512 < BLOCK_SIZE)
+    {
+        warp_compact<9>(pred_sum, tid);
+        __syncthreads();
+    }
+
+    constexpr const int last = BLOCK_SIZE - 1;
+
+    int *prefix_sum = preceeding_sum + blockIdx_x;
+    int *curr_sum = internal_sum + blockIdx_x;
+    int *curr_status = status + blockIdx_x;
+
+    __shared__ int prev_value;
+
+    if (tid == last)
+    {
+        int local_prev_value = 0;
+
+        atomicExch(curr_sum, pred_sum[last]);
+        __threadfence_system();
+        atomicExch(curr_status, SelfCompute);
+
+        if (blockIdx_x != 0)
+        {
+            int back = 1;
+            while (back <= blockIdx_x)
+            {
+                int back_status = atomicAdd(curr_status - back, 0);
+                if (back_status == NoCompute)
+                {
+                    continue;
+                }
+
+                else if (back_status == SelfCompute) {
+                    local_prev_value += atomicAdd(curr_sum - back, 0);
+                    back += 1;
+                } else {
+                    local_prev_value += atomicAdd(prefix_sum - back, 0);
+                    break;
+                }
+            }
+        }
+
+        prev_value = local_prev_value;
+    }
+
+    __syncthreads();
+
+    /// We substract the old value
+    pred_sum[tid] += prev_value - (value == -27 ? 0 : 1);
+
+    if (tid == last)
+    {
+        // +1 when propagating to other blocks otherwise we loose the last predicate value
+        // as we're using an exclusive sum
+        atomicExch(prefix_sum, pred_sum[last] + (value == -27 ? 0 : 1));
+        __threadfence_system();
+        atomicExch(curr_status, AllCompute);
+    }
+
+    /// Compact
+    if (coord < size && value != -27) {
+        int new_coord = pred_sum[tid];
+        out_buffer[new_coord] = value;
+    }
+}
+
 template <typename T, int BLOCK_SIZE>
     __global__
 void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
@@ -355,27 +491,31 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
         // Determine temporary device storage requirements
         {
-            void     *d_temp_storage = NULL;
-            size_t   temp_storage_bytes = 0;
-            int d_num_selected_out_host = 0;
+            constexpr const int blocksize = 1024;
+            const int gridsize = (num_items + blocksize - 1) / blocksize;
 
-            cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                    d_num_selected_out, num_items, select, stream);
-            // Allocate temporary storage
-            CHECK_CUDA_CALL(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
+            int *counter = NULL;
+            CHECK_CUDA_CALL(cudaMallocAsync(&counter, 1 * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(counter, 0, 1 * sizeof(int), stream));
 
-            // Run selection (removes -27s)
-            cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_out,
-                    d_num_selected_out, num_items, select, stream);
+            int *status = NULL;
+            CHECK_CUDA_CALL(cudaMallocAsync(&status, gridsize * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(status, NoCompute, gridsize * sizeof(int), stream));
 
-            /// Move to CPU side the count of item to check
-            /// TODO: Remove this (useless)
-            CHECK_CUDA_CALL(cudaMemcpyAsync(&d_num_selected_out_host,
-                        d_num_selected_out, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
+            int *internal_sum = NULL;
+            CHECK_CUDA_CALL(cudaMallocAsync(&internal_sum, gridsize * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(internal_sum, 0, gridsize * sizeof(int), stream));
 
-            assert(d_num_selected_out_host == img_dim);
+            int *preceeding_sum = NULL;
+            CHECK_CUDA_CALL(cudaMallocAsync(&preceeding_sum, gridsize * sizeof(int), stream));
+            CHECK_CUDA_CALL(cudaMemsetAsync(preceeding_sum, 0, gridsize * sizeof(int), stream));
 
-            CHECK_CUDA_CALL(cudaFreeAsync(d_temp_storage, stream));
+            compact<int, blocksize><<<gridsize, blocksize, 0, stream>>>(d_in, d_out, num_items, counter, status, internal_sum, preceeding_sum);
+
+            CHECK_CUDA_CALL(cudaFreeAsync(counter, stream));
+            CHECK_CUDA_CALL(cudaFreeAsync(status, stream));
+            CHECK_CUDA_CALL(cudaFreeAsync(internal_sum, stream));
+            CHECK_CUDA_CALL(cudaFreeAsync(preceeding_sum, stream));
         }
 
         /// Remove the random garbage values from the array
