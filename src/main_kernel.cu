@@ -48,8 +48,7 @@ void cleanup_garbage(int *buffer, int size)
     const int coords = tid + blockIdx.x * blockDim.x;
 
     constexpr const int offset[4] = { 1, -5, 3, -8 };
-    if (coords < size)
-        buffer[coords] += offset[tid & 0b11]; // mod 4
+    buffer[coords] += offset[tid & 0b11]; // mod 4
 }
 
 enum State {
@@ -88,15 +87,8 @@ __global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *in
     __syncthreads();
 
     int coord = tid + blockIdx_x * (BLOCK_SIZE << 1);
-    int value_1 = 0, value_2 = 0;
-    internal_buffer_1[tid] = internal_buffer_2[tid] = 0;
-
-    if (coord < size) {
-        value_1 = internal_buffer_1[tid] = buffer[coord];
-    }
-    else if (coord + BLOCK_SIZE < size) {
-        value_2 = internal_buffer_2[tid] = buffer[coord + BLOCK_SIZE];
-    }
+    int value_1 = internal_buffer_1[tid] = buffer[coord];
+    int value_2 = internal_buffer_2[tid] = buffer[coord + BLOCK_SIZE];
 
     __syncthreads();
 
@@ -188,17 +180,13 @@ __global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *in
 
     if constexpr (IS_INCLUSIVE)
     {
-        if (coord < size)
-            buffer[coord] = internal_buffer_1[tid];
-        if (coord + BLOCK_SIZE < size)
-            buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid];
+        buffer[coord] = internal_buffer_1[tid];
+        buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid];
     }
     else
     {
-        if (coord < size)
-            buffer[coord] = internal_buffer_1[tid] - value_1;
-        if (coord + BLOCK_SIZE < size)
-            buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid] - value_2;
+        buffer[coord] = internal_buffer_1[tid] - value_1;
+        buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid] - value_2;
     }
 }
 
