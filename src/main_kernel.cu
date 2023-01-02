@@ -88,8 +88,15 @@ __global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *in
     __syncthreads();
 
     int coord = tid + blockIdx_x * (BLOCK_SIZE << 1);
-    int value_1 = internal_buffer_1[tid] = buffer[coord];
-    int value_2 = internal_buffer_2[tid] = buffer[coord + BLOCK_SIZE];
+    int value_1 = 0, value_2 = 0;
+    internal_buffer_1[tid] = internal_buffer_2[tid] = 0;
+
+    if (coord < size) {
+        value_1 = internal_buffer_1[tid] = buffer[coord];
+    }
+    else if (coord + BLOCK_SIZE < size) {
+        value_2 = internal_buffer_2[tid] = buffer[coord + BLOCK_SIZE];
+    }
 
     __syncthreads();
 
@@ -181,18 +188,22 @@ __global__ void sum_scan(T* buffer, int size, int *counter, int* status, int *in
 
     if constexpr (IS_INCLUSIVE)
     {
-        buffer[coord] = internal_buffer_1[tid];
-        buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid];
+        if (coord < size)
+            buffer[coord] = internal_buffer_1[tid];
+        if (coord + BLOCK_SIZE < size)
+            buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid];
     }
     else
     {
-        buffer[coord] = internal_buffer_1[tid] - value_1;
-        buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid] - value_2;
+        if (coord < size)
+            buffer[coord] = internal_buffer_1[tid] - value_1;
+        if (coord + BLOCK_SIZE < size)
+            buffer[coord + BLOCK_SIZE] = internal_buffer_2[tid] - value_2;
     }
 }
 
 template <typename T, int BLOCK_SIZE>
-__global__
+    __global__
 void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
 {
     __shared__ T buffer_shared[BLOCK_SIZE << 1];
