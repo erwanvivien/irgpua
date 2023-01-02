@@ -48,7 +48,8 @@ void cleanup_garbage(int *buffer, int size)
     const int coords = tid + blockIdx.x * blockDim.x;
 
     constexpr const int offset[4] = { 1, -5, 3, -8 };
-    buffer[coords] += offset[tid & 0b11]; // mod 4
+    if (coords < size)
+        buffer[coords] += offset[tid & 0b11]; // mod 4
 }
 
 enum State {
