@@ -323,6 +323,15 @@ __global__ void compact(const T* buffer, T* out_buffer, int size, int *counter, 
     }
 }
 
+
+template <int OFFSET>
+__device__ void warp_reduce(int tid, int *buffer_shared)
+{
+    if (tid < OFFSET)
+        buffer_shared[tid] += buffer_shared[tid + OFFSET];
+}
+
+
 template <typename T, int BLOCK_SIZE>
     __global__
 void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
@@ -343,10 +352,59 @@ void reduce_sum(const T* __restrict__ buffer, T* __restrict__ total, int size)
 
     __syncthreads();
 
-    for (int offset = BLOCK_SIZE; offset > 0; offset >>= 1)
-    {
-        if (tid < offset)
-            buffer_shared[tid] += buffer_shared[tid + offset];
+    if constexpr ((BLOCK_SIZE >> 0) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 0;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr (BLOCK_SIZE >> 1 > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 1;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 2) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 2;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 3) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 3;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 4) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 4;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 5) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 5;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 6) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 6;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 7) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 7;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 8) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 8;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 9) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 9;
+        warp_reduce<BLOCK>(tid, buffer_shared);
+        __syncthreads();
+    }
+    if constexpr ((BLOCK_SIZE >> 10) > 0) {
+        constexpr const int BLOCK = BLOCK_SIZE >> 10;
+        warp_reduce<BLOCK>(tid, buffer_shared);
         __syncthreads();
     }
 
