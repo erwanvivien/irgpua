@@ -199,7 +199,10 @@ __device__ void warp_compact(int *internal_buffer, int tid)
         int right = tid >> STEP;
         int from = left * right - 1;
 
-        internal_buffer[tid] += internal_buffer[from];
+        if constexpr (STEP % 2 == 0)
+            internal_buffer[tid] += internal_buffer[from];
+        else
+            internal_buffer[tid] += internal_buffer[from] * 1.0f;
     }
 
     __syncthreads();
@@ -314,11 +317,11 @@ __global__ void compact(const T* buffer, T* out_buffer, int size, int *counter, 
     __syncthreads();
 
     /// We substract the old value
-    pred_sum[tid] += prev_value - (value == -27 ? 0 : 1);
+    // pred_sum[tid] += prev_value - (value == -27 ? 0 : 1);
+    int new_coord = pred_sum[tid] + prev_value - (value == -27 ? 0 : 1);
 
     /// Compact
     if (coord < size && value != -27) {
-        int new_coord = pred_sum[tid];
         out_buffer[new_coord] = value;
     }
 }
