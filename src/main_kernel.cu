@@ -303,21 +303,18 @@ __global__ void compact(const T* buffer, T* out_buffer, int size, int *counter, 
         }
 
         prev_value = local_prev_value;
+
+        // +1 when propagating to other blocks otherwise we loose the last predicate value
+        // as we're using an exclusive sum
+        atomicExch(prefix_sum, pred_sum[last] + prev_value);
+        __threadfence_system();
+        atomicExch(curr_status, AllCompute);
     }
 
     __syncthreads();
 
     /// We substract the old value
     pred_sum[tid] += prev_value - (value == -27 ? 0 : 1);
-
-    if (tid == last)
-    {
-        // +1 when propagating to other blocks otherwise we loose the last predicate value
-        // as we're using an exclusive sum
-        atomicExch(prefix_sum, pred_sum[last] + (value == -27 ? 0 : 1));
-        __threadfence_system();
-        atomicExch(curr_status, AllCompute);
-    }
 
     /// Compact
     if (coord < size && value != -27) {
