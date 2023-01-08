@@ -481,10 +481,15 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         /// Retrieve the attached stream
         cudaStream_t stream = streams[i % 4];
 
+        /// Pin host memory
+        int *pinned_mem = NULL;
+        CHECK_CUDA_CALL(cudaMallocHost(&pinned_mem, num_items * sizeof(int)));
+        memcpy(pinned_mem, buffer, num_items * sizeof(int));
+
         /// Prepare CUDA buffer (image input)
         int *d_in = NULL;
         CHECK_CUDA_CALL(cudaMallocAsync(&d_in, num_items * sizeof(int), stream));
-        CHECK_CUDA_CALL(cudaMemcpyAsync(d_in, buffer, num_items * sizeof(int),
+        CHECK_CUDA_CALL(cudaMemcpyAsync(d_in, pinned_mem, num_items * sizeof(int),
                         cudaMemcpyHostToDevice, stream));
 
         /// Prepare CUDA buffer (image without -27s)
@@ -611,11 +616,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // images[i].buffer.resize(img_dim);
 
         /// Retrieve the image from GPU
-        CHECK_CUDA_CALL(cudaMemcpyAsync(buffer, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
+        CHECK_CUDA_CALL(cudaMemcpyAsync(pinned_mem, d_out, img_dim * sizeof(int), cudaMemcpyDeviceToHost, stream));
         /// Retrieve the total from GPU
         CHECK_CUDA_CALL(cudaMemcpyAsync(&images[i].to_sort.total, total_sum, 1 * sizeof(int), cudaMemcpyDeviceToHost, stream));
 
         /// Clean everything
+        memcpy(buffer, pinned_mem, img_dim * sizeof(int));
+        CHECK_CUDA_CALL(cudaFreeHost(pinned_mem));
+
         CHECK_CUDA_CALL(cudaFreeAsync(d_in, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_out, stream));
         CHECK_CUDA_CALL(cudaFreeAsync(d_num_selected_out, stream));
