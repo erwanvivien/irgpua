@@ -518,15 +518,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     // #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
-        // TODO : make it GPU compatible (aka faster)
-        // You will need to copy images one by one on the GPU
-        // You can store the images the way you want on the GPU
-        // But you should treat the pipeline as a pipeline :
-        // You *must not* copy all the images and only then do the computations
-        // You must get the image from the pipeline as they arrive and launch computations right away
-        // There are still ways to speeds this process of course (wait for last class)
         images[i] = pipeline.get_image(i);
-
 
         /// Retrieve image information
         size_t width = images[i].width;
@@ -540,7 +532,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         const int gridsize = (img_dim + blocksize - 1) / blocksize;
 
         /// Retrieve the attached stream
-        cudaStream_t stream = streams[i % 4];
+        cudaStream_t stream = streams[i % STREAM_COUNT];
 
         /// Pin host memory
         int *pinned_mem = NULL;
