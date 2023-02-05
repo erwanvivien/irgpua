@@ -41,16 +41,6 @@ struct DifferentFrom
     }
 };
 
-__global__
-void cleanup_garbage(int *buffer, int size)
-{
-    const int tid = threadIdx.x;
-    const int coords = tid + blockIdx.x * blockDim.x;
-
-    constexpr const int offset[4] = { 1, -5, 3, -8 };
-    buffer[coords] += offset[tid & 0b11]; // mod 4
-}
-
 enum State {
     NoCompute = 0,
     SelfCompute = 1,
@@ -319,10 +309,11 @@ __global__ void compact(const T* buffer, T* out_buffer, int size, int *counter, 
     /// We substract the old value
     // pred_sum[tid] += prev_value - (value == -27 ? 0 : 1);
     int new_coord = pred_sum[tid] + prev_value - (value == -27 ? 0 : 1);
+    constexpr const int offset[4] = { 1, -5, 3, -8 };
 
     /// Compact
     if (coord < size && value != -27) {
-        out_buffer[new_coord] = value;
+        out_buffer[new_coord] = value + offset[new_coord & 0b11];
     }
 }
 
@@ -584,11 +575,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
             CHECK_CUDA_CALL(cudaFreeAsync(status, stream));
             CHECK_CUDA_CALL(cudaFreeAsync(internal_sum, stream));
             CHECK_CUDA_CALL(cudaFreeAsync(preceeding_sum, stream));
-        }
-
-        /// Remove the random garbage values from the array
-        {
-            cleanup_garbage<<<gridsize, blocksize, 0, stream>>>(d_out, img_dim);
         }
 
         /// Compute histogram
